@@ -1,0 +1,263 @@
+---
+title: "NYC Property Sales Analysis"
+author: "Matthew Scott"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_width: 10
+    fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+
+# Load required libraries
+library(tidyverse)
+library(caret)
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(ggcorrplot)
+library(xgboost)
+library(lubridate)
+library(gridExtra)
+library(randomForest)
+library(doParallel)
+library(lightgbm)
+
+# Source the main analysis script
+source("NYCPropertySales_Advanced.R")
+```
+
+# Executive Summary
+
+This report presents a comprehensive analysis of New York City property sales data, focusing on residential properties across different boroughs. We employ various machine learning models to predict property prices and analyze market trends.
+
+# Data Overview
+
+The analysis utilizes two primary datasets:
+1. NYC Property Sales data (`nyc-rolling-sales.csv`)
+2. NYC Building Codes (`NYC_Codes.csv`)
+
+## Data Summary
+
+```{r data-summary}
+# Create summary statistics
+summary_stats <- nyc_rolling_sales %>%
+  summarise(
+    Total_Properties = n(),
+    Avg_Price = mean(`SALE PRICE`, na.rm = TRUE),
+    Median_Price = median(`SALE PRICE`, na.rm = TRUE),
+    Avg_SqFt = mean(`GROSS SQUARE FEET`, na.rm = TRUE),
+    Median_SqFt = median(`GROSS SQUARE FEET`, na.rm = TRUE)
+  )
+
+# Display formatted summary
+knitr::kable(summary_stats, 
+             format.args = list(big.mark = ","),
+             caption = "Summary Statistics")
+
+# Borough-wise summary
+borough_summary <- nyc_rolling_sales %>%
+  group_by(borough_name) %>%
+  summarise(
+    Properties = n(),
+    Avg_Price = mean(`SALE PRICE`, na.rm = TRUE),
+    Median_Price = median(`SALE PRICE`, na.rm = TRUE)
+  )
+
+knitr::kable(borough_summary, 
+             format.args = list(big.mark = ","),
+             caption = "Borough-wise Summary")
+```
+
+# Exploratory Data Analysis
+
+## Price Distributions
+
+```{r price-distributions, fig.height=8}
+# Create price distribution plots
+p1 <- ggplot(nyc_rolling_sales, aes(x = `SALE PRICE`)) +
+  geom_histogram(binwidth = 50000, fill = "steelblue", color = "black") +
+  labs(title = "Original Sale Price Distribution", x = "Sale Price", y = "Count") +
+  scale_x_continuous(labels = scales::comma)
+
+p2 <- ggplot(nyc_rolling_sales, aes(x = log_sale_price)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Log-Transformed Sale Price Distribution", x = "Log Sale Price", y = "Count")
+
+p3 <- ggplot(nyc_rolling_sales, aes(x = `GROSS SQUARE FEET`)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  labs(title = "Sq Ft Distribution", x = "SqFt", y = "Count") +
+  scale_x_continuous(labels = scales::comma)
+
+p4 <- ggplot(nyc_rolling_sales, aes(x = log_gross_sqft)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Log Sq Ft Distribution", x = "Log SqFt", y = "Count")
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+## Geographic Analysis
+
+```{r geographic-analysis}
+# Create borough-wise price distribution
+ggplot(nyc_rolling_sales, aes(x = borough_name, y = `SALE PRICE`)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.6) +
+  labs(title = "Price Distribution by Borough",
+       x = "Borough",
+       y = "Sale Price ($)") +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Create neighborhood analysis plot
+p5 <- ggplot(nyc_rolling_sales, aes(x = `SALE PRICE`, y = NEIGHBORHOOD, color = borough_name)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~borough_name, scales = "free") +
+  labs(
+    title = "Sale Price Distribution by Neighborhood and Borough",
+    y = "Neighborhood",
+    x = "Sale Price ($)"
+  ) +
+  scale_x_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top")
+
+print(p5)
+```
+
+# Model Performance Analysis
+
+## Model Comparison
+
+```{r model-comparison}
+# Create comparison visualizations
+test_results_comprehensive <- data.frame(
+  actual = exp(y_test),
+  xgb_predicted = xgb_predictions_exp,
+  rf_predicted = rf_predictions_exp,
+  lgb_predicted = lgb_predictions_exp,
+  borough = X_test$borough_name,
+  desc = X_test$Description
+)
+
+# Borough-wise comparison
+p7 <- test_results_comprehensive %>%
+  pivot_longer(
+    cols = c(xgb_predicted, rf_predicted, lgb_predicted),
+    names_to = "model",
+    values_to = "predicted"
+  ) %>%
+  ggplot(aes(x = actual, y = predicted, color = model)) +
+  geom_point(alpha = 0.25) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  facet_wrap(~borough, scales = "free") +
+  labs(
+    title = "Model Comparison: Predicted vs Actual Values by Borough",
+    x = "Actual Sale Price ($)",
+    y = "Predicted Sale Price ($)"
+  ) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
+
+print(p7)
+
+# Model-wise comparison
+p8 <- test_results_comprehensive %>%
+  pivot_longer(
+    cols = c(xgb_predicted, rf_predicted, lgb_predicted),
+    names_to = "model",
+    values_to = "predicted"
+  ) %>%
+  ggplot(aes(x = actual, y = predicted)) +
+  geom_point(alpha = 0.25) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  facet_wrap(~model, scales = "free") +
+  labs(
+    title = "Model Comparison: Predicted vs Actual Values by Model Type",
+    x = "Actual Sale Price ($)",
+    y = "Predicted Sale Price ($)"
+  ) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
+
+print(p8)
+```
+
+## Error Analysis
+
+```{r error-analysis}
+# Create error distribution plot
+error_data <- test_results_comprehensive %>%
+  mutate(
+    xgb_error = abs(actual - xgb_predicted)/actual * 100,
+    rf_error = abs(actual - rf_predicted)/actual * 100,
+    lgb_error = abs(actual - lgb_predicted)/actual * 100
+  ) %>%
+  pivot_longer(
+    cols = c(xgb_error, rf_error, lgb_error),
+    names_to = "model",
+    values_to = "error"
+  ) %>%
+  mutate(model = gsub("_error", "", model))
+
+p9 <- ggplot(error_data, aes(x = error, fill = model)) +
+  geom_density(alpha = 0.5) +
+  labs(
+    title = "Error Distribution by Model",
+    x = "Percentage Error",
+    y = "Density",
+    fill = "Model"
+  ) +
+  theme_minimal() +
+  xlim(0, 100)
+
+print(p9)
+
+# Calculate error metrics
+error_metrics <- test_results_comprehensive %>%
+  summarise(
+    XGBoost_MAPE = mean(abs(actual - xgb_predicted)/actual * 100),
+    RF_MAPE = mean(abs(actual - rf_predicted)/actual * 100),
+    LightGBM_MAPE = mean(abs(actual - lgb_predicted)/actual * 100)
+  )
+
+knitr::kable(error_metrics, 
+             caption = "Mean Absolute Percentage Error by Model",
+             digits = 2)
+```
+
+# Conclusions
+
+1. **Price Distribution**: Property prices in NYC show significant variation across boroughs and neighborhoods, with Manhattan consistently showing higher median prices.
+
+2. **Size-Price Relationship**: There is a strong correlation between property size and price, though this relationship varies by borough.
+
+3. **Model Performance**:
+   - XGBoost shows robust performance across different price ranges
+   - Random Forest provides consistent predictions
+   - LightGBM demonstrates competitive results, particularly in mid-range properties
+
+# Recommendations
+
+1. **For Buyers**: Consider properties in emerging neighborhoods that show stable price trends but haven't yet reached peak valuations.
+
+2. **For Sellers**: Use the model predictions as a baseline for pricing strategy, considering the specific characteristics of the property and neighborhood.
+
+3. **For Future Analysis**: 
+   - Incorporate additional features such as proximity to amenities
+   - Develop borough-specific models for more accurate predictions
+   - Include temporal analysis to capture market trends 
