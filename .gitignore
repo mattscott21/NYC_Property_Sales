@@ -1,0 +1,23 @@
+# R specific
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Data files (uncomment if you want to exclude large data files)
+# data/*.csv
+
+# Results
+results/*
+!results/.gitkeep
+
+# System specific
+.DS_Store
+Thumbs.db
+
+# RStudio project files
+*.Rproj
+
+# Rendered documents
+*.html
+*.pdf 
