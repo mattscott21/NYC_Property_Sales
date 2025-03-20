@@ -20,7 +20,7 @@ NYC_Final_Project/
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/[your-username]/NYC_Property_Sales.git
+   git clone https://github.com/mattscott21/NYC_Property_Sales.git
    cd NYC_Property_Sales
    ```
 
@@ -40,7 +40,8 @@ NYC_Final_Project/
 
 ## Data Sources
 
-- NYC Property Sales data: Originally from [NYC Department of Finance](https://www1.nyc.gov/site/finance/taxes/property-rolling-sales-data.page)
+- NYC Property Sales data: Originally from [Kaggle](https://www.kaggle.com/datasets/new-york-city/nyc-property-sales?resource=download)
+
 - Building Classification Codes: [NYC Department of Finance](https://www.nyc.gov/assets/finance/jump/hlpbldgcode.html)
 
 ## Models
@@ -57,6 +58,3 @@ Results and model comparisons can be found in:
 - `results/model_performance.csv`
 - Generated visualizations in the `results` directory
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 

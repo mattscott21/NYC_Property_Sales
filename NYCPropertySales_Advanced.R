@@ -1,7 +1,7 @@
 # NYC Property Sales Advanced Analysis
 # This script performs advanced machine learning analysis on NYC property sales data
-# Author: [Your Name]
-# Date: 2024
+# Author: Matt Scott
+# Date: 3/20/2025
 
 #----Package Management----
 # List of required packages
@@ -42,7 +42,7 @@ for (dir in c("data", "results")) {
 # Function to download and extract data from GitHub
 download_from_github <- function() {
   # GitHub raw URLs for the datasets
-  github_base <- "https://raw.githubusercontent.com/your-username/NYC_Property_Sales/main/data"
+  github_base <- "https://raw.githubusercontent.com/mattscott21/NYC_Property_Sales/main/data"
   sales_url <- paste0(github_base, "/nyc-rolling-sales.csv")
   codes_url <- paste0(github_base, "/NYC_Codes.csv")
   
@@ -60,52 +60,8 @@ download_from_github <- function() {
     # If GitHub download fails, try scraping building codes and provide instructions for sales data
     message("Error downloading from GitHub: ", e$message)
     
-    # Try to create building codes file from NYC website
-    if (!file.exists("data/NYC_Codes.csv")) {
-      message("\nAttempting to create building codes file from NYC website...")
-      tryCatch({
-        url <- "https://www.nyc.gov/assets/finance/jump/hlpbldgcode.html"
-        webpage <- read_html(url)
-        
-        codes <- webpage %>%
-          html_nodes("td:nth-child(1)") %>%
-          html_text()
-        
-        descriptions <- webpage %>%
-          html_nodes("td:nth-child(2)") %>%
-          html_text()
-        
-        nyc_codes <- data.frame(
-          `Building Code` = substr(codes, 1, 1),
-          Description = trimws(descriptions)
-        ) %>%
-          distinct()
-        
-        write.csv(nyc_codes, "data/NYC_Codes.csv", row.names = FALSE)
-        message("Successfully created building codes file")
-      }, error = function(e) {
-        message("Error creating building codes file: ", e$message)
-      })
-    }
-    
-    # Provide instructions for manual data download
-    if (!file.exists("data/nyc-rolling-sales.csv")) {
-      message("\nPlease obtain the NYC Property Sales dataset through one of these methods:")
-      message("1. Download from the course GitHub repository:")
-      message("   https://github.com/your-username/NYC_Property_Sales")
-      message("2. Or download from Kaggle:")
-      message("   https://www.kaggle.com/datasets/new-york-city/nyc-property-sales")
-      message("\nPlace the file 'nyc-rolling-sales.csv' in the 'data' directory")
-      return(FALSE)
-    }
-  })
-}
 
-# Check if data files exist, if not download them
-if (!all(file.exists("data/nyc-rolling-sales.csv", "data/NYC_Codes.csv"))) {
-  if (!download_from_github()) {
-    stop("Required dataset(s) missing. Please follow the instructions above.")
-  }
+  })
 }
 
 # Load datasets
@@ -171,7 +127,8 @@ nyc_rolling_sales <- nyc_rolling_sales %>%
   ungroup()
 
 #----Neighborhood and Borough Statistics----
-# Calculate neighborhood-level statistics
+#----Calculate neighborhood-level statistics----
+
 neighborhood_stats <- nyc_rolling_sales %>%
   group_by(NEIGHBORHOOD) %>%
   summarise(
@@ -218,6 +175,71 @@ nyc_rolling_sales <- nyc_rolling_sales %>%
     season_borough_interaction = interaction(season, borough_name),
     description_building_code_interaction = interaction(Description, `Building Code`)
   )
+
+#----Visualizations----
+p1 <- ggplot(nyc_rolling_sales, aes(x = `SALE PRICE`)) +
+  geom_histogram(binwidth = 50000, fill = "steelblue", color = "black") +
+  labs(title = "Original Sale Price Distribution", x = "Sale Price", y = "Count") +
+  scale_x_continuous(labels = scales::comma)
+
+p2 <- ggplot(nyc_rolling_sales, aes(x = log_sale_price)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Log-Transformed Sale Price Distribution", x = "Log Sale Price", y = "Count")
+
+p3 <- ggplot(nyc_rolling_sales, aes(x = `GROSS SQUARE FEET`)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  labs(title = "Sq Ft Distribution", x = "SqFt", y = "Count") +
+  scale_x_continuous(labels = scales::comma)
+
+p4 <- ggplot(nyc_rolling_sales, aes(x = log_gross_sqft)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Log Sq Ft Distribution", x = "Log SqFt", y = "Count")
+
+p5 <- ggplot(nyc_rolling_sales, aes(x = `SALE PRICE`, y = NEIGHBORHOOD, color = borough_name)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~borough_name, scales = "free") +
+  labs(
+    title = "Sale Price Distribution by Neighborhood and Borough",
+    y = "Neighborhood",
+    x = "Sale Price ($)"
+  ) +
+  scale_x_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate labels for clarity
+    legend.position = "top")
+
+grid.arrange( p1,p2, p3,p4, ncol = 2)
+
+ggplot(nyc_rolling_sales, aes(x = `GROSS SQUARE FEET`, y = `SALE PRICE`, color = borough_name)) +
+  geom_point(alpha = 0.6) +
+  # geom_abline(intercept = 0, slope = 100, color = "red", linetype = "dashed") +
+  facet_wrap(~borough_name, scales = "free") +
+  labs(
+    title = "SqFt vs Sale Price by Borough",
+    x = "SqFt",
+    y = "Price"
+  ) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
+
+# Plot Sq Ft vs Sale Price
+ggplot(nyc_rolling_sales, aes(x = `GROSS SQUARE FEET`, y = `SALE PRICE`, color = Description)) +
+  geom_point(alpha = 0.25) +
+  facet_wrap(~Description, scales = "free") +
+  labs(title = "Sq Ft vs Sale Prices", x = "Sq Ft", y = "Sale Price") +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
+
+ggplot(nyc_rolling_sales, aes(x = log_gross_sqft, y = log_sale_price, color = borough_name)) +
+  geom_point(alpha = 0.25) +
+  facet_wrap(~borough_name, scales = "free") +
+  labs(title = "Log Sq Ft vs Log Sale Prices", x = "Sq Ft", y = "Sale Price") +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
 
 #----Model Preparation----
 # Define features for modeling
