@@ -1,0 +1,652 @@
+---
+title: 'NYC Property Sales Analysis: A Machine Learning Approach to Real Estate Valuation'
+author: "Matthew Scott"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+always_allow_html: true
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    latex_engine: xelatex
+    fig_caption: true
+    keep_tex: true
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+    code_folding: hide
+---
+
+```{r load_data, include=FALSE}
+# Set CRAN mirror
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Load required packages
+required_packages <- c(
+  "tidyverse", "caret", "readr", "ggplot2", "dplyr", "ggcorrplot",
+  "xgboost", "lubridate", "gridExtra", "randomForest", "doParallel",
+  "lightgbm", "mice", "scales", "knitr", "rmarkdown", "kableExtra",
+  "png", "grid", "DT", "viridis", "moments"
+)
+
+# Install and load packages
+for(pkg in required_packages) {
+  if(!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pkg, repos = "https://cloud.r-project.org")
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Create results directory if it doesn't exist
+if(!dir.exists("results")) dir.create("results")
+
+# Define consistent theme
+my_theme <- theme_bw() +
+  theme(
+    plot.title = element_text(size = 11, face = "bold", hjust = 0),
+    axis.title = element_text(size = 10),
+    axis.text = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    strip.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA),
+    legend.key = element_rect(fill = "white", color = NA),
+    legend.background = element_rect(fill = "white", color = NA)
+  )
+
+# Define required files
+required_files <- c(
+  "results/svd_results.rds",
+  "results/svd_scree_plot.png",
+  "results/feature_importance_plot.png",
+  "results/feature_importance.rds",
+  "results/overall_metrics.rds",
+  "results/error_distribution.png",
+  "results/borough_performance.png",
+  "results/property_price_performance.png",
+  "results/detailed_price_performance.png",
+  "results/best_models_by_borough.csv",
+  "results/best_models_by_property_type.csv",
+  "results/best_performing_scenarios.csv"
+)
+
+# Check for required files and run analysis if needed
+# Set this to TRUE only when you want to run the analysis
+run_analysis <- FALSE
+
+if(run_analysis) {
+  message("Running analysis script...")
+  source("NYCPropertySales_Advanced.R")
+} else {
+  message("Skipping analysis script. Using existing results if available.")
+}
+
+# Set knitr options
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+
+# Load required plots
+price_dist_plot <- readRDS("results/price_distribution.rds")
+price_sqft_plot <- readRDS("results/price_sqft.rds")
+age_dist_plot <- readRDS("results/building_age.rds")
+seasonal_plot <- readRDS("results/seasonal_patterns.rds")
+```
+
+# Executive Summary
+
+This report presents a comprehensive analysis of the New York City Property Sales dataset, focusing on understanding and predicting property prices across different boroughs. Using advanced machine learning techniques, models were developed that can accurately predict property values and provide valuable insights for real estate stakeholders.
+
+# Introduction
+
+This report analyzes the New York City Property Sales dataset to understand and predict property prices across different boroughs. The dataset contains detailed information about property sales in NYC, including sale prices, property characteristics, and location data. The goal is to develop accurate predictive models that can help understand the factors influencing property prices and provide insights for real estate stakeholders.
+
+### Dataset Overview
+
+The dataset includes several key variables:
+
+\- Sale Price: The transaction price of the property
+
+\- Property Characteristics: Building class, square footage, year built
+
+\- Location Data: Borough, neighborhood, zip code
+
+\- Property Type: Residential units, commercial units
+
+\- Temporal Data: Sale date, season
+
+```{r price_distribution, echo=FALSE, fig.width=12, fig.height=10}
+# Load required library
+library(grid)
+library(png)
+
+# Display the price distribution plots
+grid.arrange(
+  rasterGrob(readPNG("results/price_distribution.png")),
+  ncol = 1
+)
+```
+
+These histograms show the distribution of property sale prices in both original and log-transformed scales, focusing on residential properties with meaningful sale prices. The log transformation helps to better visualize the distribution of prices by reducing the impact of extreme values and making the distribution more symmetric.
+
+These histograms show the distribution of gross square footage in both original and log-transformed scales, focusing on residential properties with valid square footage values. The log transformation helps to better visualize the distribution by reducing the impact of extreme values and making the distribution more symmetric.
+
+Let's begin by examining the distribution of property prices across different boroughs:
+
+```{r echo=FALSE, fig.width=12, fig.height=6}
+print(readRDS("results/price_density_by_borough.rds"))
+```
+
+This visualization shows the distribution of property prices across NYC boroughs, with Manhattan properties typically commanding higher prices. The log scale helps us better understand the price ranges across different areas.
+
+# Methodology
+
+The analysis employed a comprehensive approach with three main components:
+
+## Data Quality and Cleaning
+
+The dataset required several cleaning steps to ensure reliable analysis:
+
+1.  **Data Cleaning**
+    -   Removed transactions with sale prices below \$100,000 to eliminate potential data entry errors
+    -   Filtered out properties with missing or zero square footage values
+    -   Excluded properties with invalid year built values
+    -   Focused analysis on one and two-family dwellings for consistency
+2.  **Outlier Management**
+    -   Applied z-score based outlier detection (threshold of 1.2816, 80th percentile)
+    -   Removed extreme values in price per square foot calculations
+    -   Handled outliers separately by borough to account for different market conditions
+3.  **Data Standardization**
+    -   Converted all monetary values to numeric format
+    -   Standardized address formats and borough names
+    -   Created consistent property type classifications
+    -   Normalized square footage measurements
+
+These cleaning steps were essential for:
+
+\- Ensuring model reliability
+
+\- Reducing the impact of data entry errors
+
+\- Maintaining consistency across different property types
+
+\- Improving the accuracy of price predictions
+
+## Feature Engineering
+
+The analysis included several feature engineering steps:
+
+1.  **Transformations**
+    -   Created log transformations for price and square footage to handle skewed distributions
+    -   Generated temporal features (season, month, year) to capture market trends
+    -   Calculated property age and related metrics
+2.  **Aggregate Features**
+    -   Created neighborhood-level statistics (average prices, trends)
+    -   Developed borough-level market indicators
+    -   Generated price per square foot metrics
+3.  **Interaction Terms**
+    -   Combined property characteristics with location features
+    -   Created temporal-location interactions
+    -   Developed property type-specific metrics
+
+### Feature Importance Analysis
+
+Our analysis revealed several key features that significantly influence property prices in NYC:
+
+1.  **Location-Based Features**
+    -   Borough: Manhattan properties command significantly higher prices
+    -   Neighborhood: Local market conditions and amenities strongly impact values
+    -   Zip Code: Micro-location factors show strong correlation with prices
+2.  **Property Characteristics**
+    -   Square Footage: One of the strongest predictors of property value
+    -   Building Age: Newer properties typically command premium prices
+    -   Building Class: Different property types show distinct price patterns
+3.  **Temporal Features**
+    -   Year Built: Historical significance and architectural style impact values
+4.  **Derived Features**
+    -   Price per Square Foot by Neighborhood and Borough: Key metric for property valuation. Removed Price per SqFt from the model so the model couldnt infer based on the SqFt of the property
+    -   Property Age: Calculated from year built
+    -   Neighborhood Statistics: Average prices and trends in local areas
+
+The feature importance analysis, conducted using multiple models, consistently identified square footage, location (borough and neighborhood), and building characteristics as the most influential factors in determining property values. This aligns with real estate market fundamentals and provides valuable insights for both buyers and sellers.
+
+# Modeling Approach
+
+Four different models were implemented to predict property prices:
+
+-   **Linear Regression**: A baseline model for comparison
+
+-   **XGBoost**: A gradient boosting framework known for its performance in regression tasks
+
+-   **Random Forest**: An ensemble learning method using multiple decision trees
+
+-   **LightGBM**: A gradient boosting framework optimized for efficiency
+
+-   Models were trained using an 80/20 train-test split to maintain sufficient data for training while having enough test data for robust evaluation.
+
+-   Cross-validation was employed to ensure model reliability
+
+## Train-Test Split Strategy
+
+The analysis utilized an 80/20 train-test split for model development, which is a common and well-justified approach in real estate prediction for several reasons:
+
+1.  **Data Volume Balance**
+    -   The 80% training set provides sufficient data for the models to learn complex patterns in property prices
+    -   The 20% test set is large enough to provide reliable performance estimates while maintaining a substantial training dataset
+2.  **Real Estate Market Considerations**
+    -   Property sales data exhibits strong temporal and spatial patterns
+    -   The larger training set helps capture these patterns across different neighborhoods and property types
+    -   The test set size is adequate to evaluate performance across various price ranges and boroughs
+3.  **Model Complexity**
+    -   Our tree-based models (XGBoost, Random Forest, LightGBM) benefit from larger training sets to learn intricate relationships between features
+    -   The 80/20 split provides enough data for these complex models while maintaining a robust validation set
+
+This split ratio has been validated in similar real estate prediction studies and provides a good balance between model training and evaluation.
+
+Let's examine some of the key relationships we discovered during feature engineering:
+
+```{r echo=FALSE, fig.width=12, fig.height=6}
+# Display price per square foot plot
+print(price_sqft_plot)
+```
+
+This plot shows the relationship between price per square foot and borough, revealing significant variations in property values across NYC.
+
+```{r echo=FALSE, fig.width=12, fig.height=6}
+# Display building age distribution
+print(age_dist_plot)
+```
+
+The building age distribution shows how property ages vary across boroughs, which is a crucial factor in property valuation.
+
+```{r setup, include=FALSE}
+# Load required packages
+required_packages <- c(
+  "tidyverse", "caret", "readr", "ggplot2", "dplyr", "ggcorrplot",
+  "xgboost", "lubridate", "gridExtra", "randomForest", "doParallel",
+  "lightgbm", "mice", "scales", "knitr", "rmarkdown", "kableExtra",
+  "png", "grid", "DT", "viridis", "ggcorrplot", "gridExtra", "moments"
+)
+
+# Install and load packages
+for(pkg in required_packages) {
+  if(!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pkg, repos = "https://cloud.r-project.org")
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Load required plots
+price_distribution <- readRDS("results/price_distribution.rds")
+price_sqft <- readRDS("results/price_sqft.rds")
+building_age <- readRDS("results/building_age.rds")
+```
+
+## Model Tuning Process
+
+The model development process involved several key steps to ensure optimal performance:
+
+1.  **Cross-Validation Strategy**
+    -   5-fold cross-validation was employed for all models
+    -   Early stopping was implemented for tree-based models (XGBoost and LightGBM) with a patience of 100 rounds
+    -   Parallel processing was utilized for Random Forest cross-validation to improve efficiency
+2.  **Hyperparameter Tuning**
+    -   **XGBoost**: Optimized parameters included:
+        -   Learning rate (eta): 0.01
+        -   Maximum depth: 15
+        -   Subsample ratio: 0.8
+        -   Column sampling: 0.9
+        -   Regularization parameters (lambda: 1, alpha: 0.1)
+    -   **Random Forest**: Key parameters tuned:
+        -   Number of trees: 1000
+        -   Mtry values: Sequentially tested from 2 to 20
+        -   Maximum nodes: 200
+        -   Node size: 5
+        -   Sample size: 80% of training data
+    -   **LightGBM**: Optimized parameters included:
+        -   Learning rate: 0.1
+        -   Number of leaves: 31
+        -   Maximum depth: 15
+        -   Feature fraction: 0.6
+        -   Bagging fraction: 0.8
+        -   L1 regularization: 0.1
+3.  **Feature Engineering and Selection**
+    -   SVD dimensionality reduction was applied to capture 95% of variance
+    -   Feature importance analysis was conducted for each model
+    -   Interaction terms were created between key features
+    -   Log transformations were applied to handle skewed distributions
+4.  **Model Evaluation**
+    -   Multiple metrics were used: RMSE, MAPE, R²
+    -   Performance was evaluated across different price ranges and boroughs
+    -   Residual analysis was conducted to identify potential improvements
+
+# Results
+
+## Overall Model Performance
+
+The analysis shows that tree-based models (XGBoost, Random Forest, and LightGBM) consistently outperformed the linear regression model. The XGBoost model achieved the best overall performance with the lowest MAPE and highest R² values.
+
+```{r echo=FALSE}
+# Load and display overall metrics
+overall_metrics <- readRDS("results/overall_metrics.rds")
+kable(overall_metrics %>% select(-Model), 
+      caption = "Overall Model Performance Metrics",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+```
+
+## Feature Importance Analysis
+
+```{r echo=FALSE}
+# Load and display feature importance
+xgb_importance <- read.csv("results/xgboost_feature_importance.csv")
+rf_importance <- read.csv("results/rf_feature_importance.csv")
+lgb_importance <- read.csv("results/lgb_feature_importance.csv")
+
+# Display top 10 features for each model
+kable(head(xgb_importance, 10), 
+      caption = "Top 10 Most Important Features (XGBoost)",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+
+kable(head(rf_importance, 10), 
+      caption = "Top 10 Most Important Features (Random Forest)",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+
+kable(head(lgb_importance, 10), 
+      caption = "Top 10 Most Important Features (LightGBM)",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+```
+
+The feature importance analysis reveals the key factors that influence property prices across different models. While there are some variations between models, several features consistently emerge as important predictors. The importance metrics shown are:
+
+- Gain: Represents the relative contribution of each feature to the model, measured by the improvement in accuracy when the feature is used in splits. Higher gain indicates more important features.
+- Cover: Shows how many times a feature is used to split the data across all trees. Higher coverage suggests the feature is frequently used for decision making.
+- Frequency: Indicates how often a feature appears in the trees relative to all features. A higher frequency means the feature is used more often in the model's decision process.
+
+## Correlation Analysis
+
+```{r echo=FALSE, fig.width=12, fig.height=8}
+# Display correlation heatmap
+grid.raster(readPNG("results/correlation_heatmap.png"))
+```
+
+The correlation analysis reveals the relationships between different features and how they influence property prices. This helps understand which factors are most closely associated with price variations.
+
+## Price Range Performance
+
+```{r echo=FALSE}
+# Load and display price range metrics
+price_range_metrics <- readRDS("results/price_range_metrics.rds")
+
+# Format metrics for display
+price_range_metrics_formatted <- price_range_metrics %>%
+  mutate(
+    # Format RMSE values
+    across(ends_with("_rmse"), ~sprintf("$%s", format(round(.), big.mark=","))),
+    # Format MedAE values
+    across(ends_with("_medae"), ~sprintf("$%s", format(round(.), big.mark=","))),
+    # Format R² values
+    across(ends_with("_r2"), ~sprintf("%.3f", .)),
+    # Format MAPE values
+    across(ends_with("_mape"), ~sprintf("%.1f%%", .))
+  )
+
+# Create separate tables for each metric type
+# RMSE Table
+rmse_table <- price_range_metrics_formatted %>%
+  select(price_range, ends_with("_rmse")) %>%
+  rename_with(~gsub("_rmse", "", .), ends_with("_rmse"))
+
+# R² Table
+r2_table <- price_range_metrics_formatted %>%
+  select(price_range, ends_with("_r2")) %>%
+  rename_with(~gsub("_r2", "", .), ends_with("_r2"))
+
+# MedAE Table
+medae_table <- price_range_metrics_formatted %>%
+  select(price_range, ends_with("_medae")) %>%
+  rename_with(~gsub("_medae", "", .), ends_with("_medae"))
+
+# MAPE Table
+mape_table <- price_range_metrics_formatted %>%
+  select(price_range, ends_with("_mape")) %>%
+  rename_with(~gsub("_mape", "", .), ends_with("_mape"))
+
+# Display tables
+kable(rmse_table, 
+      caption = "Root Mean Square Error (RMSE) by Price Range",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+
+kable(r2_table, 
+      caption = "R² Score by Price Range",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+
+kable(medae_table, 
+      caption = "Median Absolute Error (MedAE) by Price Range",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+
+kable(mape_table, 
+      caption = "Mean Absolute Percentage Error (MAPE) by Price Range",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+```
+
+## Seasonal Analysis
+
+```{r echo=FALSE, fig.width=12, fig.height=6}
+# Display seasonal patterns
+print(readRDS("results/seasonal_patterns.rds"))
+```
+
+The seasonal analysis reveals interesting patterns in property sales across different boroughs. This visualization shows how property prices vary by season, providing insights into the best times for buying or selling in different areas of NYC.
+
+## Best Model Selection by Scenario
+
+```{r echo=FALSE}
+# Load and display best models by scenario
+best_models_detailed <- read.csv("results/best_models_detailed.csv")
+kable(best_models_detailed, 
+      caption = "Best Performing Models by Borough and Price Range",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+```
+
+This analysis shows which models perform best in different scenarios, helping to inform model selection for specific use cases.
+
+## Key Findings
+
+1.  **Model Performance Patterns**
+    -   Tree-based models consistently outperformed linear regression
+    -   XGBoost and Random Forest showed similar performance levels
+    -   LightGBM provided a good balance of performance and efficiency
+2.  **Geographic Patterns**
+    -   Manhattan properties showed the highest average prices
+    -   Brooklyn and Queens showed strong price growth
+    -   The Bronx and Staten Island had more moderate price ranges
+3.  **Property Type Impact**
+    -   One-family dwellings showed different price patterns compared to two-family dwellings
+    -   Property age significantly impacted prices, with newer properties commanding higher prices
+
+## Residual Analysis
+
+```{r echo=FALSE, fig.width=12, fig.height=6, out.width= '100%'}
+grid.arrange(
+  rasterGrob(readPNG("results/xgb_residual_plot.png")),
+  rasterGrob(readPNG("results/lgb_residual_plot.png")),
+  rasterGrob(readPNG("results/rf_residual_plot.png")), 
+  rasterGrob(readPNG("results/lm_residual_plot.png")),
+  ncol=2
+)
+```
+
+The residual analysis reveals:
+
+\- Generally well-distributed errors across price ranges
+
+\- Slight tendency to overestimate lower-priced properties
+
+\- Better performance in the middle price ranges
+
+\- Some challenges with very high-value properties
+
+## Best Performing Scenarios
+
+The analysis identified several scenarios where models performed particularly well:
+
+1.  **Price Range Performance**
+    -   Most stable performance in the \$250K-\$500K range (RMSE: \$91,165 for XGBoost, MAPE: 18.6%)
+    -   Moderate performance in the \$500K-\$750K range (RMSE: \$128,105 for Random Forest, MAPE: 15.9%)
+    -   Notable performance in the \$750K-\$1M range (RMSE: \$159,701 for Random Forest, MAPE: 13.1%)
+    -   Strong performance in the \$1M-\$1.5M range (RMSE: \$225,392 for LightGBM, MAPE: 15.2%)
+    -   Challenging performance in the \$1.5M-\$2M range (RMSE: \$513,739 for XGBoost, MAPE: 26.4%)
+    -   High variability in the Under \$250K range (RMSE: \$150,814 for Random Forest, MAPE: 58.4%)
+    -   Significant challenges with luxury properties over \$2M (RMSE: \$1,674,693 for XGBoost, MAPE: 25.0%)
+
+2.  **Model Performance**
+    -   XGBoost achieved the best overall performance (R² = 0.849, RMSE: \$272,156)
+    -   Random Forest showed strong performance (R² = 0.846, RMSE: \$275,073)
+    -   LightGBM provided competitive results (R² = 0.830, RMSE: \$288,502)
+    -   Linear Regression performed as expected baseline (R² = 0.378, RMSE: \$552,181)
+
+3.  **Error Analysis**
+    -   Median Absolute Error (MedAE) was lowest for Random Forest (\$77,508)
+    -   XGBoost and LightGBM showed similar MedAE values (\$81,339 and \$80,321 respectively)
+    -   Linear Regression had the highest MedAE (\$81,978)
+
+The analysis reveals several key insights:
+
+1. **Price Range Performance**:
+   - The models perform best in the middle price ranges (\$500K-\$1.5M), with MAPE values between 13.1% and 18.6%
+   - Performance degrades significantly for properties under \$250K (MAPE: 58.4%) and over \$2M (MAPE: 25.0%)
+   - The \$750K-\$1M range shows the most accurate predictions (MAPE: 13.1%)
+
+2. **Model Comparison**:
+   - XGBoost now leads in overall performance with the highest R² (0.849) and lowest RMSE (\$272,156)
+   - The three tree-based models (XGBoost, Random Forest, LightGBM) show similar performance patterns
+   - Linear Regression serves as a good baseline but is significantly outperformed by the tree-based models
+
+3. **Error Patterns**:
+   - MedAE values are relatively consistent across models (\$77K-\$82K), suggesting similar median prediction accuracy
+   - The high RMSE values in luxury properties (\$1.5M+) indicate greater variability in predictions for high-value properties
+   - The extremely high MAPE in the under \$250K range suggests challenges in accurately predicting prices for lower-value properties
+
+These results suggest that while the models are effective for the majority of the market, they face challenges with:
+1. Very low-value properties (under \$250K)
+2. Luxury properties (over \$2M)
+3. Properties in the \$1.5M-\$2M range
+
+This could be due to:
+- Different market dynamics in these price segments
+- Limited training data in these ranges
+- More complex factors influencing prices at the extremes of the market
+
+# Conclusion
+
+This analysis provides valuable insights into NYC property sales patterns and demonstrates the effectiveness of advanced machine learning models in predicting property prices.
+
+## Limitations and Future Work
+
+While the models provide valuable insights, there are some limitations:
+
+\- The dataset only includes completed sales
+
+\- External factors like interest rates are not included
+
+\- Some neighborhoods may have limited data points
+
+Future work could incorporate:
+
+\- Additional data sources (economic indicators, interest rates)
+
+\- Separate models for different property types
+
+\- Time series analysis to track price trends
+
+\- More sophisticated feature engineering techniques
+
+## Potential Ensemble Model Approaches
+
+Based on our analysis of model performance across different scenarios, we can identify opportunities for ensemble modeling:
+
+```{r echo=FALSE}
+# Load and display best models by borough
+best_models_by_borough <- read.csv("results/best_models_by_borough.csv")
+kable(best_models_by_borough, 
+      caption = "Best Performing Models by Borough",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE,
+                font_size = 12)
+
+
+```
+
+These results suggest that an ensemble approach could be developed where: - Different models are used for different boroughs based on their performance - Price-range specific models are employed for different segments of the market - A weighted ensemble could be created that gives more weight to the best performing model for each scenario
+
+## Implications
+
+The models developed in this analysis can help:
+
+\- Real estate professionals in property valuation
+
+\- Investors in identifying market opportunities
+
+\- Home buyers in understanding market trends
+
+\- Urban planners in understanding housing market dynamics
+
+# References
+
+1.  Mitchell, J. (2016). NYC Property Sales [Data set]. Kaggle. https://www.kaggle.com/datasets/new-york-city/nyc-property-sales
+
+2.  NYC Department of Finance. (2024). NYC Rolling Sales Data. [Dataset]. Retrieved from <https://www.nyc.gov/assets/finance/jump/hlpbldgcode.html>
+
+3.  Chen, T., & Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System. In Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (pp. 785-794).
+
+4.  Breiman, L. (2001). Random Forests. Machine Learning, 45(1), 5-32.
+
+5.  Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., ... & Liu, T. Y. (2017). LightGBM: A Highly Efficient Gradient Boosting Decision Tree. In Advances in Neural Information Processing Systems (pp. 3146-3154).
+
+6.  R Core Team. (2024). R: A Language and Environment for Statistical Computing. R Foundation for Statistical Computing, Vienna, Austria.
+
+7.  Wickham, H., & Grolemund, G. (2016). R for Data Science: Import, Tidy, Transform, Visualize, and Model Data. O'Reilly Media, Inc.
+
+8.  Kuhn, M. (2024). caret: Classification and Regression Training. R package version 6.0-94.
+
+9.  Wickham, H., et al. (2024). tidyverse: Easily Install and Load the 'Tidyverse'. R package version 2.0.0.
+
+10. ChatGPT was used for assistance with R Markdown formatting and document structure. 
+
+Github Link: https://github.com/mattscott21/NYC_Property_Sales
